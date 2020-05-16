@@ -30,20 +30,21 @@ protected:
     guint8 *localPixBuf = nullptr;
     iter_t *iterationsArr = nullptr;
     int maxIterations;
+
+    // the palette used (have a look at the constructor to select a different palette
     Palette *palette;
-    int n_channels;
-    int rowstride;
+
+    // array length of the RGB-pixel colors. 3 positions per pixel for (R,G,B)
     long pixbuf_array_size;
+
+    // the number of pixels in the virtual canvas
     long iterations_array_size;
 
-    RGBColor *color_black;
-    complex_base_type fw, fh, cw,ch;
+    // the inner color of the Mandelbrot fractal is black; this color is created once.
+    RGBColor *color_black = new RGBColor(0,0,0);
 
     complex_base_type ratio_x, ratio_y;
     ComplexNumber *zeroCenter = new ComplexNumber(0, 0);
-
-    double paletOffset = 0;
-
 
 };
 

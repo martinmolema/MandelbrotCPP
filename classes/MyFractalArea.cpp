@@ -15,44 +15,75 @@
 #include <vector>
 #include <iomanip>
 
+/**
+ * Setup the Fractal. The calculation is done using threading. the number of threads created is determined by the
+ *   parameters tasks_x and tasks_y
+ * @param width the width of the fractal in pixels
+ * @param height the height of the fractal in pixels
+ * @param tasks_x the number of threads to create to slice the fractal plane in the horizontal direction
+ * @param tasks_y the number of threads to create to slice the fractal plane in the vertical direction
+ */
 MyFractalArea::MyFractalArea(int width, int height, int tasks_x, int tasks_y ) {
     maxIterations = 200;
+
     //palette = new PaletteRGB(maxIterations);
     palette = new PaletteHSL(maxIterations);
+
     palette->Calculate();
     this->width = width;
     this->height = height;
     this->tasks_x = tasks_x;
     this->tasks_y = tasks_y;
 
-    color_black = new RGBColor(0, 0, 0);
 }
 
-MyFractalArea::~MyFractalArea() = default;
+MyFractalArea::~MyFractalArea(){
+    delete palette;
+}
 
+/**
+ * Does the actual drawing
+ * @return always returns true
+ */
 bool MyFractalArea::draw() {
 
+    // create a rectangle to represent the virtual canvas to be drawn upon
     canvas_plane  = new Rectangle(0,0, width, height);
+
+    // create a rectangle to represent the fractal plane
+    // FIXME: the dimensions / ratio of the fractal plane should be adjusted to the ratio of the canvas plane to
+    //        prevent distorted images
     fractal_plane = new Rectangle(-2, 2, 2, -2);
 
-    fw = fractal_plane->width();
-    fh = fractal_plane->height();
-    cw = canvas_plane->width();
-    ch = canvas_plane->height();
+    // setup a lot of constants to prevent recalculation by eahch thread
+    complex_base_type fw = fractal_plane->width();
+    complex_base_type fh = fractal_plane->height();
+    complex_base_type cw = canvas_plane->width();
+    complex_base_type ch = canvas_plane->height();
 
+    // calculate the ratio of the fractal plane and the virtual canvas (how much of the fractal plane is represented by one pixel)
     ratio_x = fw / cw;
     ratio_y = fh / ch;
 
-    n_channels            = 3;
-    rowstride             = canvas_plane->width()  * n_channels; //3 bytes per pixel (RGB , 1 byte per channel)
-    pixbuf_array_size     = canvas_plane->height() * rowstride;
-    iterations_array_size = canvas_plane->area_size();
+    // calculate how large the RGB-color buffer should be (used in this->assignColors function)
+    int n_channels    = 3; // (R,G,B)
+    int rowstride     = canvas_plane->width()  * n_channels; //3 bytes per pixel (RGB , 1 byte per channel)
+    pixbuf_array_size = canvas_plane->height() * rowstride;
 
+    // calculate the number of pixels in the virtual canvas; each position will be assigned the number of iterations for
+    // that pixel
+    iterations_array_size = canvas_plane->area_size();
+    // create the array
     iterationsArr = new iter_t[iterations_array_size];
+
+    // fill the array with -1: because the algorithm doing all the calculations can skip certain positions due to optimising
+    // the value -1 represents "MAX_ITERATIONS"
     std::fill_n(iterationsArr, iterations_array_size, -1);
 
+    // start a timer for later reporting
     uint64_t start_time = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::system_clock::now().time_since_epoch()).count();
 
+    // calculate the number of threads and their workload (surface area)
     int nrOfTasks_x = tasks_x;
     int nrOfTasks_y = tasks_y;
 
@@ -62,6 +93,8 @@ bool MyFractalArea::draw() {
     Rectangle **parts = new Rectangle *[nrOfTasks];
     std::thread *threads = new std::thread[nrOfTasks];
 
+    // slice the canvas into squares and assign threads to do the calculations
+    // because the slices do not overlap there is no locking
     int left = 0;
     int top  = 0;
     int slicex = canvas_plane->width()  / nrOfTasks_x; // this will yield an integer
@@ -86,8 +119,7 @@ bool MyFractalArea::draw() {
         threads[i].join();
         //std::cout << "Task finished: " << i << "\n";
     }
-    //calculatePart(canvas_plane);
-
+    // when the threads have finished assign the colors
     assignColors();
 
     uint64_t end_time = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::system_clock::now().time_since_epoch()).count();
@@ -117,6 +149,8 @@ long  MyFractalArea::calculatePart(Rectangle *part, uint64_t times[], int thread
     int y1 = (int)part->y1;
     int y2 = (int)part->y2;
 
+    int circle_boundary = 2 * 2;
+
     complex_base_type fx1 = fractal_plane->x1;
     complex_base_type fy1 = fractal_plane->y1;
 
@@ -136,7 +170,7 @@ long  MyFractalArea::calculatePart(Rectangle *part, uint64_t times[], int thread
 
             c.set(cx, cy);
 
-            bool inCircle = c.calculateDistanceSquared(*zeroCenter) < (2 * 2);
+            bool inCircle = c.calculateDistanceSquared(*zeroCenter) < circle_boundary;
 
             if (inCircle) {
                 complex_base_type distToPrevious;
@@ -148,7 +182,7 @@ long  MyFractalArea::calculatePart(Rectangle *part, uint64_t times[], int thread
                     start.sqr()->add(c);
                     distToPrevious = start.calculateDistanceSquared(previous);
 
-                    hasConverged = distToPrevious < (0.00003 * 0.00003);
+                    hasConverged = distToPrevious < (ComplexNumber::EPSILON_SQR);
                     needsMoreIterations = (++iterations) < maxIterations;
 
                     isStable = start.calculateDistanceSquared(*zeroCenter) < 4;
@@ -171,7 +205,14 @@ long  MyFractalArea::calculatePart(Rectangle *part, uint64_t times[], int thread
     return end_time - start_time ;
 }
 
+/**
+ * Converts the calculated iterations to an actual color from the palette. Because a one-dimensional array is used
+ * this is quite fast
+ * FIXME:: could multi-threading speed this up? maybe do the assigning in the calculation thread?
+ * @return true
+ */
 bool MyFractalArea::assignColors() {
+    // create the actual pixel buffer for holding RGB-colors : 1 byte per RGB color
     localPixBuf = new guint8[pixbuf_array_size];
     long pixbufcounter = 0;
 
